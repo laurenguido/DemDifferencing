@@ -59,9 +59,6 @@ def robust_nmad(arr):
 
 
 def get_aspect(dem):
-    """
-    Robust aspect calculation across xDEM versions.
-    """
     try:
         return dem.get_terrain_attribute("aspect")
     except AttributeError:
@@ -92,7 +89,7 @@ class CoregBiasPipeline:
         self.stable_masks = {}
 
     # ---------------------------------------------------
-    # DEM loading / alignment / AOI mask
+    # DEM loading / alignment / clipping
     # ---------------------------------------------------
     def load_dems(self, dem_paths, aoi_path=None):
         self.dems = {k: xdem.DEM(v) for k, v in dem_paths.items()}
@@ -200,7 +197,8 @@ class CoregBiasPipeline:
         plt.colorbar(label="Stable terrain mask")
         plt.title(
             f"{pair_name} - Stable Terrain Mask\n"
-            f"|dh_raw| < {self.stable_dh_threshold:.2f} m, stable area = {stable_pct:.2f}%"
+            f"|dh_raw| < {self.stable_dh_threshold:.2f} m, "
+            f"stable area = {stable_pct:.2f}%"
         )
         plt.tight_layout()
         plt.show()
@@ -229,12 +227,6 @@ class CoregBiasPipeline:
     # Production bias correction
     # ---------------------------------------------------
     def bias_correct_production(self, tgt, stable_mask):
-        """
-        Production correction:
-            1. first-order deramp
-            2. directional bias correction at 90 degrees
-            3. aspect bias correction
-        """
         print(
             f"\nRunning production bias correction: "
             f"deramp_order={self.deramp_order}, "
@@ -306,15 +298,9 @@ class CoregBiasPipeline:
             return None
 
     # ---------------------------------------------------
-    # dDEM analysis / plotting / histogram value export
+    # dDEM analysis / plotting / histogram exports
     # ---------------------------------------------------
-    def analyze(
-        self,
-        label,
-        tgt,
-        stage="unknown",
-        stable_mask=None,
-    ):
+    def analyze(self, label, tgt, stage="unknown", stable_mask=None):
         dh = tgt - self.ref
         dh_arr = safe_array(dh)
 
@@ -415,6 +401,56 @@ class CoregBiasPipeline:
             plt.title(f"{label} - Slope vs dDEM")
             plt.tight_layout()
             plt.show()
+
+    # ---------------------------------------------------
+    # Save final DEM and dDEM products
+    # ---------------------------------------------------
+    def save_final_outputs(self, pair_name, tgt_raw, tgt_coreg, tgt_corrected):
+        dem_dir = output_dir / "final_dem_products"
+        dem_dir.mkdir(parents=True, exist_ok=True)
+
+        raw_dh = tgt_raw - self.ref
+        coreg_dh = tgt_coreg - self.ref
+        corrected_dh = tgt_corrected - self.ref
+
+        safe_pair = pair_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+
+        coreg_dem_path = dem_dir / f"{safe_pair}_target_coregistered.tif"
+        corrected_dem_path = (
+            dem_dir
+            / f"{safe_pair}_target_coreg_bias_aspect_o{self.deramp_order}_a{self.directional_angle}.tif"
+        )
+
+        raw_dh_path = dem_dir / f"{safe_pair}_RAW_dDEM.tif"
+        coreg_dh_path = dem_dir / f"{safe_pair}_COREG_ONLY_dDEM.tif"
+        corrected_dh_path = (
+            dem_dir
+            / f"{safe_pair}_COREG_BIAS_ASPECT_o{self.deramp_order}_a{self.directional_angle}_dDEM.tif"
+        )
+
+        tgt_coreg.save(coreg_dem_path)
+        tgt_corrected.save(corrected_dem_path)
+
+        raw_dh.save(raw_dh_path)
+        coreg_dh.save(coreg_dh_path)
+        corrected_dh.save(corrected_dh_path)
+
+        self.metadata["final_saved_outputs"] = {
+            "coregistered_target_dem": str(coreg_dem_path),
+            "corrected_target_dem": str(corrected_dem_path),
+            "raw_dDEM": str(raw_dh_path),
+            "coreg_only_dDEM": str(coreg_dh_path),
+            "corrected_dDEM": str(corrected_dh_path),
+        }
+
+        print("\n========================================")
+        print("FINAL DEM PRODUCTS SAVED")
+        print("========================================")
+        print(f"Coregistered target DEM: {coreg_dem_path}")
+        print(f"Corrected target DEM:    {corrected_dem_path}")
+        print(f"Raw dDEM:                {raw_dh_path}")
+        print(f"Coreg-only dDEM:         {coreg_dh_path}")
+        print(f"Corrected dDEM:          {corrected_dh_path}")
 
     # ---------------------------------------------------
     # Uncertainty analysis
@@ -533,7 +569,9 @@ class CoregBiasPipeline:
             print("Skipping final corrected analysis because correction failed.")
             return
 
-        final_label = f"{pair_name}_COREG_BIAS_ASPECT_o{self.deramp_order}_a{self.directional_angle}"
+        final_label = (
+            f"{pair_name}_COREG_BIAS_ASPECT_o{self.deramp_order}_a{self.directional_angle}"
+        )
 
         self.analyze(
             label=final_label,
@@ -548,8 +586,15 @@ class CoregBiasPipeline:
             stable_mask=stable_mask,
         )
 
+        self.save_final_outputs(
+            pair_name=pair_name,
+            tgt_raw=tgt,
+            tgt_coreg=tgt_coreg,
+            tgt_corrected=tgt_corrected,
+        )
+
     # ---------------------------------------------------
-    # Summary table
+    # Summary tables
     # ---------------------------------------------------
     def summarize_runs(self):
         df = pd.DataFrame(self.results).copy()
@@ -575,21 +620,33 @@ class CoregBiasPipeline:
             raw_abs_median = raw_row.get("stable_abs_median", np.nan)
 
             if np.isfinite(raw_nmad) and raw_nmad != 0:
-                df["stable_NMAD_improvement_pct"] = 100 * (raw_nmad - df["stable_NMAD"]) / raw_nmad
+                df["stable_NMAD_improvement_pct"] = (
+                    100 * (raw_nmad - df["stable_NMAD"]) / raw_nmad
+                )
             else:
                 df["stable_NMAD_improvement_pct"] = np.nan
 
             if np.isfinite(raw_rmse) and raw_rmse != 0:
-                df["stable_RMSE_improvement_pct"] = 100 * (raw_rmse - df["stable_RMSE"]) / raw_rmse
+                df["stable_RMSE_improvement_pct"] = (
+                    100 * (raw_rmse - df["stable_RMSE"]) / raw_rmse
+                )
             else:
                 df["stable_RMSE_improvement_pct"] = np.nan
 
             if np.isfinite(raw_abs_median) and raw_abs_median != 0:
-                df["stable_bias_improvement_pct"] = 100 * (raw_abs_median - df["stable_abs_median"]) / raw_abs_median
+                df["stable_bias_improvement_pct"] = (
+                    100 * (raw_abs_median - df["stable_abs_median"]) / raw_abs_median
+                )
             else:
                 df["stable_bias_improvement_pct"] = np.nan
 
-        sort_cols = ["stable_NMAD", "stable_RMSE", "stable_abs_median", "NMAD", "RMSE"]
+        sort_cols = [
+            "stable_NMAD",
+            "stable_RMSE",
+            "stable_abs_median",
+            "NMAD",
+            "RMSE",
+        ]
         sort_cols = [c for c in sort_cols if c in df.columns]
 
         rank_df = df.sort_values(sort_cols, ascending=True).reset_index(drop=True)
@@ -694,3 +751,4 @@ print(f"Raw metrics:         {raw_csv}")
 print(f"Ranked metrics:      {ranked_csv}")
 print(f"Uncertainty summary: {unc_csv}")
 print(f"Histogram values:    {output_dir / 'histogram_values'}")
+print(f"Final DEM products:  {output_dir / 'final_dem_products'}")
