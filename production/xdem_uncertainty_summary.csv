@@ -1,0 +1,4 @@
+label,status,mean_sigma,median_sigma,max_sigma,spatial_corr_function
+post-pre_COREG_BIAS_ASPECT_o1_a90_uncertainty,success,0.15786980263997646,0.1498901038126681,1.5942167157427334,<function correlation_from_variogram.<locals>.rho at 0x000002DF50D3B740>
+post-pre_COREG_ONLY_uncertainty,success,0.1913465902952378,0.20107369278477294,1.7007554826281057,<function correlation_from_variogram.<locals>.rho at 0x000002DF54E2D080>
+post-pre_RAW_uncertainty,success,0.2293071709881318,0.23081964274122221,1.9154783537626494,<function correlation_from_variogram.<locals>.rho at 0x000002E0863202C0>
